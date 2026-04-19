@@ -2,13 +2,11 @@ import streamlit as st
 import pdfplumber
 import re
 import pandas as pd
-from io import BytesIO
 
 
 def parsuj_artykuly(plik) -> dict[str, str]:
     """
     Wyciąga unikalne pary (numer_artykułu -> nazwa) z PDF Kontrola Braków.
-    
     Zwraca słownik: {"81175": "DESPERADOS RED 400ML", ...}
     """
     artykuly = {}
@@ -41,37 +39,61 @@ def parsuj_artykuly(plik) -> dict[str, str]:
 
                 nazwa = " ".join(nazwa_tokens).strip()
 
-                # Zapisz tylko jeśli nazwa nie jest pusta i artykułu jeszcze nie ma
                 if nazwa and numer not in artykuly:
                     artykuly[numer] = nazwa
 
     return artykuly
 
 
-# ── UI ──────────────────────────────────────────────────────────────────────
+# ── Session state ────────────────────────────────────────────────────────────
+
+if "artykuly" not in st.session_state:
+    st.session_state.artykuly = {}
+
+if "wgrane_pliki" not in st.session_state:
+    st.session_state.wgrane_pliki = []
+
+# ── UI ───────────────────────────────────────────────────────────────────────
 
 st.title("📦 Parser artykułów – Kontrola Braków")
-st.write("Wgraj plik PDF z kontroli braków, aby wyciągnąć listę artykułów.")
+st.write("Wgrywaj kolejne pliki PDF — artykuły będą dodawane do wspólnej bazy.")
 
 uploaded_file = st.file_uploader("Wybierz plik PDF", type="pdf")
 
 if uploaded_file:
-    with st.spinner("Parsowanie pliku..."):
-        try:
-            artykuly = parsuj_artykuly(uploaded_file)
-        except Exception as e:
-            st.error(f"Błąd podczas parsowania: {e}")
-            st.stop()
+    # Nie parsuj tego samego pliku dwa razy
+    if uploaded_file.name not in st.session_state.wgrane_pliki:
+        with st.spinner("Parsowanie pliku..."):
+            try:
+                nowe = parsuj_artykuly(uploaded_file)
+            except Exception as e:
+                st.error(f"Błąd podczas parsowania: {e}")
+                st.stop()
 
-    st.success(f"Znaleziono **{len(artykuly)}** unikalnych artykułów.")
+        przed = len(st.session_state.artykuly)
+        st.session_state.artykuly.update(nowe)
+        po = len(st.session_state.artykuly)
+        st.session_state.wgrane_pliki.append(uploaded_file.name)
 
-    # Tabela
+        st.success(f"Dodano **{po - przed}** nowych artykułów. Łącznie w bazie: **{po}**.")
+    else:
+        st.info(f"Plik **{uploaded_file.name}** był już wgrany wcześniej.")
+
+# ── Wgrane pliki ─────────────────────────────────────────────────────────────
+
+if st.session_state.wgrane_pliki:
+    with st.expander(f"📂 Wgrane pliki ({len(st.session_state.wgrane_pliki)})"):
+        for nazwa in st.session_state.wgrane_pliki:
+            st.write(f"✅ {nazwa}")
+
+# ── Tabela ───────────────────────────────────────────────────────────────────
+
+if st.session_state.artykuly:
     df = pd.DataFrame(
-        [(numer, nazwa) for numer, nazwa in artykuly.items()],
+        [(numer, nazwa) for numer, nazwa in st.session_state.artykuly.items()],
         columns=["Numer artykułu", "Nazwa artykułu"],
     )
 
-    # Pole wyszukiwania
     szukaj = st.text_input("🔍 Filtruj po nazwie lub numerze")
     if szukaj:
         maska = (
@@ -85,10 +107,18 @@ if uploaded_file:
     st.dataframe(df_filtered, use_container_width=True, hide_index=True)
 
     # Eksport do CSV
-    csv = df.to_csv(index=False, sep=";", encoding="utf-8-sig")
+    csv = df.to_csv(index=False, sep=";").encode("cp1250")
     st.download_button(
         label="⬇️ Pobierz jako CSV",
         data=csv,
         file_name="artykuly.csv",
-        mime="text/csv",
+        mime="text/csv; charset=utf-8-sig",
     )
+
+    # Czyszczenie bazy
+    if st.button("🗑️ Wyczyść bazę"):
+        st.session_state.artykuly = {}
+        st.session_state.wgrane_pliki = []
+        st.rerun()
+else:
+    st.info("Baza jest pusta. Wgraj plik PDF aby rozpocząć.")
